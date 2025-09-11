@@ -1,0 +1,283 @@
+classdef STRController < handle
+    properties
+        Epsilon = 1e-6;
+        NodeId = 0;
+        LineId = 0;
+        SupportId = 0;
+        SectionId = 0;
+        MaterialId = 0;
+        ReleaseId = 0;
+        LoadId = 0;
+        NodalLoadId = 0;
+
+        STRNodes;
+        STRLines;
+        STRSupports;
+        STRSections;
+        STRMaterials;
+        STRReleases;
+        STRLoad;
+        STRNodalLoads;
+    end
+
+    methods
+        function obj = STRController()
+        end
+        
+        function node = AddSTRNode(obj,x,y,z)
+
+            for i = 1 : length(obj.STRNodes)
+                existingNode = obj.STRNodes(i);
+                if  (abs(existingNode.X - x) < obj.Epsilon && ...
+                        abs(existingNode.Y - y) < obj.Epsilon && ...
+                        abs(existingNode.Z - z) < obj.Epsilon)
+                    node = existingNode;
+                    return;
+                end
+            end
+            obj.NodeId = obj.NodeId + 1;
+            id = obj.NodeId;
+            node = STRNode(id,x,y,z);
+            obj.STRNodes = [obj.STRNodes,node];
+        end
+        
+
+        function line = AddSTRLine(obj,node1,node2)
+                for i = 1 : length(obj.STRLines)
+                    existingLine = obj.STRLines(i);
+                    if (existingLine.Node1.Id == node1.Id &&...
+                           existingLine.Node2.Id == node2.Id )
+                        line = existingLine;
+                        return;
+                        
+                    end
+
+                    if (existingLine.Node2.Id == node1.Id &&...
+                           existingLine.Node1.Id == node2.Id )
+                        line = existingLine;
+                        return;
+                        
+                    end
+                end
+               obj.LineId = obj.LineId + 1;
+               id = obj.LineId;
+               line = STRLine(id,node1,node2);
+               obj.STRLines = [obj.STRLines, line];
+        end
+        
+        %% Section Region
+        function section = AddSTRSection(obj,name,ax,ix,iy,iz)
+            obj.SectionId = obj.SectionId + 1;
+            id = obj.SectionId;
+            section = STRSection(id,name,ax,ix,iy,iz);
+            obj.STRSections = [obj.STRSections, section];
+        end
+        function section = AddSTRSectionRectangular(obj,name,width,height)
+            ax = width * height;
+            iy = 1.0/12.0 * width * height^3;
+            iz = 1.0/12.0 * height * width^3;
+            ix = iz + iy ;% placeholder for polar moment of inertia
+            obj.SectionId = obj.SectionId + 1;
+            id = obj.SectionId;
+            section = STRSection(id,name,ax,ix,iy,iz);
+            obj.STRSections = [obj.STRSections, section];
+        end
+        function ApplySection(~, line,section)
+            line.Section = section;
+        end
+        
+
+
+        function DeleteSection(~,line)
+            line.Section = [];
+        end
+        %% Support Region
+        
+        function support = AddSTRSupport(obj,name,kux,kuy,kuz,krx,kry,krz)
+                obj.SupportId = obj.SupportId + 1;
+                id = obj.SupportId;
+                support = STRSupport(id,name,kux,kuy,kuz,krx,kry,krz);
+                obj.STRSupports = [obj.STRSupports, support];
+        end
+
+        function support = AddSTRSupportFixed(obj,name)
+                obj.SupportId = obj.SupportId + 1;
+                id = obj.SupportId;
+                support = STRSupport(id,name,...
+                STRSupport.KURigid,...
+                STRSupport.KURigid,...
+                STRSupport.KURigid,...
+                STRSupport.KRRigid,...
+                STRSupport.KRRigid,...
+                STRSupport.KRRigid);
+                obj.STRSupports = [obj.STRSupports, support];
+        end
+
+        function support = AddSTRSupportPinned(obj,name)
+                obj.SupportId = obj.SupportId + 1;
+                id = obj.SupportId;
+                support = STRSupport(id,name,...
+                STRSupport.KURigid,...
+                STRSupport.KURigid,...
+                STRSupport.KURigid,...
+                STRSupport.KRFree,...
+                STRSupport.KRFree,...
+                STRSupport.KRFree);
+                obj.STRSupports = [obj.STRSupports, support];
+        end
+
+        function support = AddSTRSupportRoller(obj,name)
+                obj.SupportId = obj.SupportId + 1;
+                id = obj.SupportId;
+                support = STRSupport(id,name,...
+                STRSupport.KUFree,...
+                STRSupport.KUFree,...
+                STRSupport.KURigid,...
+                STRSupport.KRFree,...
+                STRSupport.KRFree,...
+                STRSupport.KRFree);
+                obj.STRSupports = [obj.STRSupports, support];
+        end
+        
+        function ApplySupport(~, node, support)
+             node.Support = support;
+        end
+
+        function DeleteSupport(~,node)
+            node.Support = [];
+        end
+        %% Material
+        function material = AddSTRMaterial(obj,name,e,p)
+            obj.MaterialId = obj.MaterialId + 1;
+            id = obj.MaterialId;
+            material = STRMaterial(id, name,e,p);
+            obj.STRMaterials = [obj.STRMaterials, material];
+        end
+
+        function ApplyMaterial(~, line,material)
+            line.Material = material;
+        end
+
+        function DeleteMaterial(~, line)
+            line.Material = [];
+        end
+        %% Load Cases
+        function load = AddSTRLoad(obj,name)
+            obj.LoadId = obj.LoadId + 1;
+            id = obj.LoadId;
+            load = STRLoads(id,name);
+            obj.STRLoad = [obj.STRLoad, load];
+        end
+        %% Nodal Load Case
+
+        function nodalLoad = AddSTRNodalLoad(obj,fx,fy,fz,mx,my,mz)
+            obj.NodalLoadId = obj.NodalLoadId + 1;
+            id = obj.NodalLoadId;
+            nodalLoad = STRNodalLoad(id,fx,fy,fz,mx,my,mz);
+            obj.STRNodalLoads = [obj.STRNodalLoads, nodalLoad];
+        end
+
+        %% Release Section
+        function release = AddSTRRelease(obj,name,kux1,kuy1,kuz1,krx1,kry1,krz1,kux2,kuy2,kuz2,krx2,kry2,krz2)
+                 obj.ReleaseId = obj.ReleaseId + 1;
+                 id = obj.ReleaseId;
+                 release = STRRelease(id,name,kux1,kuy1,kuz1,krx1,kry1,krz1,kux2,kuy2,kuz2,krx2,kry2,krz2);
+                 obj.STRReleases = [obj.STRReleases,release];
+        end
+
+        function release = AddSTRReleaseRigidPinned(obj,name)
+                obj.ReleaseId = obj.ReleaseId + 1;
+                 id = obj.ReleaseId;
+                 release = STRRelease(id,name,STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRRigid,STRRelease.KRRigid,STRRelease.KRRigid,...
+                     STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRFree,STRRelease.KRFree,STRRelease.KRFree);
+                 obj.STRReleases = [obj.STRReleases,release];
+        end
+
+        function release = AddSTRReleasePinnedRigid(obj,name)
+                obj.ReleaseId = obj.ReleaseId + 1;
+                 id = obj.ReleaseId;
+                 release = STRRelease(id,name,STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRFree,STRRelease.KRFree,STRRelease.KRFree,...
+                     STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRRigid,STRRelease.KRRigid,STRRelease.KRRigid);
+                 obj.STRReleases = [obj.STRReleases,release];
+        end
+
+        function release = AddSTRReleasePinnedPinned(obj,name)
+                obj.ReleaseId = obj.ReleaseId + 1;
+                 id = obj.ReleaseId;
+                 release = STRRelease(id,name,STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRFree,STRRelease.KRFree,STRRelease.KRFree,...
+                     STRRelease.KURigid,STRRelease.KURigid,STRRelease.KURigid,...
+                     STRRelease.KRFree,STRRelease.KRFree,STRRelease.KRFree);
+                 obj.STRReleases = [obj.STRReleases,release];
+        end
+
+        function ApplyRelease(~, line,release)
+            line.Release = release;
+        end
+
+        function DeleteRelease(~, line)
+            line.Release = [];
+        end
+        %% Reporting
+
+        function ToString(obj)
+            fprintf('Nodes %i , Lines %i\n', length(obj.STRNodes), length(obj.STRLines));
+            fprintf('===================Nodes=====================\n');
+            for i = 1 : length(obj.STRNodes)
+                targetNode = obj.STRNodes(i);
+                targetNode.ToString();
+            end
+            fprintf('===================Lines=====================\n');
+            for i = 1 : length(obj.STRLines)
+                targetLine = obj.STRLines(i);
+                targetLine.ToString();
+                fprintf('\n');
+            end
+
+            fprintf('===================Supports=====================\n');
+            for i = 1 : length(obj.STRSupports)
+                targetSupport = obj.STRSupports(i);
+                targetSupport.ToString();
+            end
+
+
+            fprintf('===================Sections=====================\n');
+            for i = 1 : length(obj.STRSections)
+                targetSection = obj.STRSections(i);
+                targetSection.ToString();
+            end
+
+            fprintf('===================Materials=====================\n');
+            for i = 1 : length(obj.STRMaterials)
+                targetMaterial = obj.STRMaterials(i);
+                targetMaterial.ToString();
+            end
+
+
+            fprintf('===================Releases=====================\n');
+            for i = 1 : length(obj.STRReleases)
+                targetRelease = obj.STRReleases(i);
+                targetRelease.ToString();
+            end
+
+             fprintf('===================Loads=====================\n');
+            for i = 1 : length(obj.STRLoad)
+                targetLoad = obj.STRLoad(i);
+                targetLoad.ToString();
+            end
+
+            fprintf('===================Nodal Loads=====================\n');
+            for i = 1 : length(obj.STRNodalLoads)
+                targetNodaLoad = obj.STRNodalLoads(i);
+                targetLoad.ToString();
+            end
+        end
+    
+    end
+
+
+end
