@@ -30,18 +30,22 @@ release2 = controller.AddSTRReleasePinnedRigid('Pin-rigid2');
 release3 = controller.AddSTRReleaseRigidPinned('Rigid-Pin');
 release4 = controller.AddSTRReleasePinnedPinned('Pin-Pin');
 
-load1 = controller.AddSTRLoad('DL');
-load2 = controller.AddSTRLoad('LL');
-load3 = controller.AddSTRLoad('WL');
+loadCase1 = controller.AddSTRLoad('DL');
+loadCase2 = controller.AddSTRLoad('LL');
+loadCase3 = controller.AddSTRLoad('WL');
 
-nodalLoad1 = controller.AddSTRNodalLoad(45,23,32,0,0,9);
+nodalLoad1 = controller.AddSTRNodalLoad(loadCase1.Id,45,23,32,0,0,9);
+lineLoad1 = controller.AddSTRLineLoadConcentrated(loadCase2.Id,122,122,122,0,0,0,5.983);
+
+lineDist1 = controller.AddSTRLineLoadDistributed(loadCase3.Id,7,8,4,7,0,0,1, ...
+    5,6,5,9,7,77,5);
+
 controller.ApplyLoad(nodalLoad1,[1 3 5]);
 controller.DeleteLoad(nodalLoad1);
 controller.ApplyLoad(nodalLoad1,[1 2 4]);
 
-lineLoad1 = controller.AddSTRLineLoadConcentrated(122,122,122,0,0,0,5.983);
-
 controller.ApplyLoad(lineLoad1, [1 5]);
+controller.ApplyLoad(lineDist1, [1 5]);
 
 controller.ApplyMaterial(line1,material1);
 controller.ApplyMaterial(line2, material2);

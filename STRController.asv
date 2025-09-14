@@ -9,6 +9,7 @@ classdef STRController < handle
         ReleaseId = 0;
         LoadId = 0;
         NodalLoadId = 0;
+        LineLoadId = 0;
 
         STRNodes;
         STRLines;
@@ -18,6 +19,7 @@ classdef STRController < handle
         STRReleases;
         STRLoad;
         STRNodalLoads;
+        STRLineLoadsConc;
     end
 
     methods
@@ -176,7 +178,39 @@ classdef STRController < handle
             nodalLoad = STRNodalLoad(id,fx,fy,fz,mx,my,mz);
             obj.STRNodalLoads = [obj.STRNodalLoads, nodalLoad];
         end
+        
+        
+        %% Concentrated Line Load
+        function lineLoadConc = AddSTRLineLoadConcentrated(obj,fx,fy,fz,mx,my,mz,relativeLocation)
+                obj.LineLoadId = obj.LineLoadId + 1;
+                id = obj.LineLoadId;
+                lineLoadConc = STRLineLoadConcentrated(id,fx,fy,fz,mx,my,mz,relativeLocation);
+                obj.STRLineLoadsConc = [obj.STRLineLoadsConc, lineLoadConc];
+        end
+         %% Distributed Line Load
+         function lineLoadDist = AddSTRLineLoadDistributed(obj,fxs,fys,fzs,mxs,mys,mzs,relativeLocationStart, ...
+                fxe,fye,fze,mxe,mye,mze,relativeLocationEnd)
+                obj.LineLoadId = obj.LineLoadId + 1;
+                id = obj.LineLoadId;
+                lineLoadDist = STRLineLoadConcentrated(id,fxs,fys,fzs,mxs,mys,mzs,relativeLocationStart);
+                obj.STRLineLoadsConc = [obj.STRLineLoadsConc, lineLoadDist];
+        end
 
+        %% General Load Functions
+        function ApplyLoad(~,load,appliedTo)
+            for i=1:length(appliedTo)
+                id = appliedTo(i);
+                if (~any(load.AppliedTo == id))
+                 load.AppliedTo = [load.AppliedTo,id];
+                end
+            end
+            load.AppliedTo = sort(load.AppliedTo);
+        end
+
+        function DeleteLoad(~,load)
+            load.AppliedTo = [];
+        end
+        
         %% Release Section
         function release = AddSTRRelease(obj,name,kux1,kuy1,kuz1,krx1,kry1,krz1,kux2,kuy2,kuz2,krx2,kry2,krz2)
                  obj.ReleaseId = obj.ReleaseId + 1;
@@ -272,8 +306,14 @@ classdef STRController < handle
 
             fprintf('===================Nodal Loads=====================\n');
             for i = 1 : length(obj.STRNodalLoads)
-                targetNodaLoad = obj.STRNodalLoads(i);
-                targetLoad.ToString();
+                targetNodalLoad = obj.STRNodalLoads(i);
+                targetNodalLoad.ToString();
+            end
+
+            fprintf('===================Line Loads Concentrated=====================\n');
+            for i = 1 : length(obj.STRLineLoadsConc)
+                targetLineLoad = obj.STRLineLoadsConc(i);
+                targetLineLoad.ToString();
             end
         end
     

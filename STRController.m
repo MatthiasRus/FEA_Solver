@@ -9,8 +9,9 @@ classdef STRController < handle
         ReleaseId = 0;
         LoadId = 0;
         NodalLoadId = 0;
-        LineLoadId = 0;
+        LineLoadConcId = 0;
 
+        LineLoadDistId = 0;
         STRNodes;
         STRLines;
         STRSupports;
@@ -20,6 +21,7 @@ classdef STRController < handle
         STRLoad;
         STRNodalLoads;
         STRLineLoadsConc;
+        STRLineLoadsDist;
     end
 
     methods
@@ -87,9 +89,6 @@ classdef STRController < handle
         function ApplySection(~, line,section)
             line.Section = section;
         end
-        
-
-
         function DeleteSection(~,line)
             line.Section = [];
         end
@@ -172,20 +171,29 @@ classdef STRController < handle
         end
         %% Nodal Load Case
 
-        function nodalLoad = AddSTRNodalLoad(obj,fx,fy,fz,mx,my,mz)
+        function nodalLoad = AddSTRNodalLoad(obj,LoadCaseId,fx,fy,fz,mx,my,mz)
             obj.NodalLoadId = obj.NodalLoadId + 1;
             id = obj.NodalLoadId;
-            nodalLoad = STRNodalLoad(id,fx,fy,fz,mx,my,mz);
+            nodalLoad = STRNodalLoad(id,LoadCaseId,fx,fy,fz,mx,my,mz);
             obj.STRNodalLoads = [obj.STRNodalLoads, nodalLoad];
         end
         
         
         %% Concentrated Line Load
-        function lineLoadConc = AddSTRLineLoadConcentrated(obj,fx,fy,fz,mx,my,mz,relativeLocation)
-                obj.LineLoadId = obj.LineLoadId + 1;
-                id = obj.LineLoadId;
-                lineLoadConc = STRLineLoadConcentrated(id,fx,fy,fz,mx,my,mz,relativeLocation);
+        function lineLoadConc = AddSTRLineLoadConcentrated(obj,LoadCaseId,fx,fy,fz,mx,my,mz,relativeLocation)
+                obj.LineLoadConcId = obj.LineLoadConcId + 1;
+                id = obj.LineLoadConcId;
+                lineLoadConc = STRLineLoadConcentrated(id,LoadCaseId,fx,fy,fz,mx,my,mz,relativeLocation);
                 obj.STRLineLoadsConc = [obj.STRLineLoadsConc, lineLoadConc];
+        end
+         %% Distributed Line Load
+         function lineLoadDist = AddSTRLineLoadDistributed(obj,LoadCaseId,fxs,fys,fzs,mxs,mys,mzs,relativeLocationStart, ...
+                fxe,fye,fze,mxe,mye,mze,relativeLocationEnd)
+                obj.LineLoadDistId = obj.LineLoadDistId + 1;
+                id = obj.LineLoadDistId;
+                lineLoadDist = STRLineLoadDistributed(id,LoadCaseId,fxs,fys,fzs,mxs,mys,mzs,relativeLocationStart, ...
+                    fxe,fye,fze,mxe,mye,mze,relativeLocationEnd);
+                obj.STRLineLoadsDist = [obj.STRLineLoadsDist, lineLoadDist];
         end
 
         %% General Load Functions
@@ -306,6 +314,12 @@ classdef STRController < handle
             for i = 1 : length(obj.STRLineLoadsConc)
                 targetLineLoad = obj.STRLineLoadsConc(i);
                 targetLineLoad.ToString();
+            end
+
+            fprintf('===================Line Loads Distributed=====================\n');
+            for i = 1 : length(obj.STRLineLoadsDist)
+                targetLineLoadDist = obj.STRLineLoadsDist(i);
+                targetLineLoadDist.ToString();
             end
         end
     
