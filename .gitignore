@@ -1,1 +1,32 @@
 
+# CMake / build
+build/
+build-linux/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.ninja
+.ninja_*
+
+# MSVC / VS generated
+.vs/
+x64/
+Debug/
+Release/
+MyProject.dir/
+*.vcxproj.user
+*.suo
+*.ilk
+*.pdb
+*.obj
+*.exe
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime outputs
+output/*.csv
