@@ -1,0 +1,14 @@
+{
+  "vim.insertModeKeyBindings": [
+    {
+      "before": [
+        "j",
+        "k"
+      ],
+      "after": [
+        "<Esc>"
+      ]
+    }
+  ],
+  "CurrentProjectSetting": "x64-Debug"
+}
