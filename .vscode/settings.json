@@ -1,0 +1,17 @@
+{
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/mat-ros/RoboticsLab/ros2_ws/build/robot_controller",
+        "/home/mat-ros/RoboticsLab/ros2_ws/install/robot_controller/lib/python3.10/site-packages",
+        "/home/mat-ros/RoboticsLab/ros2_ws/install/custom_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/mat-ros/RoboticsLab/ros2_ws/build/robot_controller",
+        "/home/mat-ros/RoboticsLab/ros2_ws/install/robot_controller/lib/python3.10/site-packages",
+        "/home/mat-ros/RoboticsLab/ros2_ws/install/custom_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

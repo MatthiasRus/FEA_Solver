@@ -77,7 +77,16 @@ python3 scripts/dashboard_gradio.py
 
 Then open the URL shown by Gradio (default `http://127.0.0.1:7860`).
 
-In the dashboard:
+In the dashboard you now have 2 tabs:
+
+### Model Builder
+1. Pick a template and click **Apply template** (Sample Portal, Two Story, Cantilever, Triangular Truss), or fill tables manually.
+2. Click **Validate**.
+3. Click **Build model text** (optional preview).
+4. Click **Save model** to write `.fea`.
+5. Click **Save + Solve** to run immediately.
+
+### Solve & Visualize
 1. Set/select executable, model file, and output directory.
 2. Click **Run solver**.
 3. Click **Refresh load cases**.
