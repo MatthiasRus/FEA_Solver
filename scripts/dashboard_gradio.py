@@ -1,10 +1,13 @@
 import csv
+import math
+import os
 import pathlib
 import subprocess
 from typing import Dict, List, Tuple
 
 import gradio as gr
 import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -50,6 +53,19 @@ TEMPLATE_CHOICES = [
     "Simple Triangular Truss",
 ]
 
+MATERIAL_PRESETS: Dict[str, Tuple[float, float]] = {
+    "Steel": (2.10e11, 0.30),
+    "Concrete": (3.00e10, 0.20),
+    "Aluminum": (7.00e10, 0.33),
+    "Timber": (1.10e10, 0.35),
+}
+
+MATERIAL_COLS = ["name", "E", "nu", "G"]
+
+
+def shear_from_e_nu(e: float, nu: float) -> float:
+    return e / (2.0 * (1.0 + nu))
+
 
 def sample_rows(columns: List[str]) -> List[List[str]]:
     if columns == NODE_COLS:
@@ -63,7 +79,9 @@ def sample_rows(columns: List[str]) -> List[List[str]]:
     if columns == SECTION_COLS:
         return [["R300x500", "0.30", "0.50"]]
     if columns == MATERIAL_COLS:
-        return [["CONCRETE", "2.0e10", "8.0e9"]]
+        e = 2.0e10
+        nu = 0.25
+        return [["CONCRETE", f"{e:.6g}", f"{nu:.4g}", f"{shear_from_e_nu(e, nu):.6g}"]]
     if columns == ASSIGN_SECTION_COLS:
         return [["1", "R300x500"], ["2", "R300x500"], ["3", "R300x500"]]
     if columns == ASSIGN_MATERIAL_COLS:
@@ -142,7 +160,7 @@ def tables_to_model_text(
         "# SUPPORT_DEF name FIXED|PINNED|ROLLER",
         "# SUPPORT node supportName",
         "# SECTION_RECT name width height",
-        "# MATERIAL name E G",
+        "# MATERIAL name E G  (nu is optional in builder and used to compute G)",
         "# ASSIGN_SECTION line sectionName",
         "# ASSIGN_MATERIAL line materialName",
         "# LOAD_CASE key name",
@@ -169,7 +187,19 @@ def tables_to_model_text(
     for row in section_rows:
         out.append(f"SECTION_RECT {row[0]} {row[1]} {row[2]}")
     for row in material_rows:
-        out.append(f"MATERIAL {row[0]} {row[1]} {row[2]}")
+        name = row[0]
+        e_text = row[1]
+        nu_text = row[2]
+        g_text = row[3]
+        g_out = g_text
+        try:
+            if (not g_out) and e_text and nu_text:
+                g_out = f"{shear_from_e_nu(float(e_text), float(nu_text)):.12g}"
+        except Exception:
+            pass
+        if not g_out:
+            g_out = "0"
+        out.append(f"MATERIAL {name} {e_text} {g_out}")
     for row in assign_section_rows:
         out.append(f"ASSIGN_SECTION {row[0]} {row[1]}")
     for row in assign_material_rows:
@@ -285,7 +315,18 @@ def validate_tables(
             errors.append(f"Duplicate MATERIAL name: {row[0]}")
         material_names.add(row[0])
         parse_float(row[1], f"MATERIAL {row[0]} E", errors)
-        parse_float(row[2], f"MATERIAL {row[0]} G", errors)
+        nu = row[2]
+        g = row[3]
+        if nu:
+            nu_value = parse_float(nu, f"MATERIAL {row[0]} nu", errors)
+            if nu_value is not None and (nu_value <= -1.0 or nu_value >= 0.5):
+                errors.append(f"MATERIAL {row[0]} nu should be in (-1, 0.5)")
+        if g:
+            g_value = parse_float(g, f"MATERIAL {row[0]} G", errors)
+            if g_value is not None and g_value <= 0.0:
+                errors.append(f"MATERIAL {row[0]} G must be > 0")
+        if not nu and not g:
+            errors.append(f"MATERIAL {row[0]} must define nu or G")
 
     for row in assign_section_rows:
         line = parse_int(row[0], "ASSIGN_SECTION line", errors)
@@ -401,6 +442,21 @@ def parse_fea_model(model_path: str):
         elif kind == "SECTION_RECT" and len(payload) == 3:
             sections.append(payload)
         elif kind == "MATERIAL" and len(payload) == 3:
+            name = payload[0]
+            e_text = payload[1]
+            g_text = payload[2]
+            nu_text = ""
+            try:
+                e_value = float(e_text)
+                g_value = float(g_text)
+                if g_value > 0:
+                    nu_calc = e_value / (2.0 * g_value) - 1.0
+                    if -1.0 < nu_calc < 0.5:
+                        nu_text = f"{nu_calc:.6g}"
+            except Exception:
+                pass
+            materials.append([name, e_text, nu_text, g_text])
+        elif kind == "MATERIAL" and len(payload) == 4:
             materials.append(payload)
         elif kind == "ASSIGN_SECTION" and len(payload) == 2:
             assign_sections.append(payload)
@@ -456,7 +512,7 @@ def template_tables(template_name: str):
             [["FIXED", "FIXED"]],
             [["1", "FIXED"], ["6", "FIXED"]],
             [["SEC", "0.30", "0.40"]],
-            [["STEEL", "2.10e11", "8.00e10"]],
+            [["STEEL", "2.10e11", "0.30", "8.076923e10"]],
             [["1", "SEC"], ["2", "SEC"], ["3", "SEC"], ["4", "SEC"], ["5", "SEC"]],
             [["1", "STEEL"], ["2", "STEEL"], ["3", "STEEL"], ["4", "STEEL"], ["5", "STEEL"]],
             [["1", "DEAD"], ["2", "LIVE"], ["3", "WIND"]],
@@ -472,7 +528,7 @@ def template_tables(template_name: str):
             [["FIXED", "FIXED"]],
             [["1", "FIXED"]],
             [["SEC", "0.20", "0.30"]],
-            [["STEEL", "2.10e11", "8.00e10"]],
+            [["STEEL", "2.10e11", "0.30", "8.076923e10"]],
             [["1", "SEC"]],
             [["1", "STEEL"]],
             [["1", "POINT"]],
@@ -488,7 +544,7 @@ def template_tables(template_name: str):
             [["PIN", "PINNED"], ["ROL", "ROLLER"]],
             [["1", "PIN"], ["2", "ROL"]],
             [["TRUSS", "0.10", "0.10"]],
-            [["STEEL", "2.00e11", "7.70e10"]],
+            [["STEEL", "2.00e11", "0.30", "7.692308e10"]],
             [["1", "TRUSS"], ["2", "TRUSS"], ["3", "TRUSS"]],
             [["1", "STEEL"], ["2", "STEEL"], ["3", "STEEL"]],
             [["1", "SERVICE"]],
@@ -523,6 +579,20 @@ def apply_template(template_name: str):
 def reset_builder_tables():
     tables = template_tables("Sample Portal Frame")
     return (*tables, tables_to_model_text(*tables), "Builder reset to sample template.")
+
+
+def apply_material_preset(material_rows, preset_name: str):
+    rows = clean_table_rows(material_rows, len(MATERIAL_COLS))
+    if preset_name not in MATERIAL_PRESETS:
+        return rows
+    e, nu = MATERIAL_PRESETS[preset_name]
+    g = shear_from_e_nu(e, nu)
+    preset_row = [preset_name.upper(), f"{e:.6g}", f"{nu:.6g}", f"{g:.6g}"]
+    if rows:
+        rows[0] = preset_row
+    else:
+        rows = [preset_row]
+    return rows
 
 
 def build_and_validate_text(
@@ -596,7 +666,369 @@ def list_load_cases(output_dir: pathlib.Path) -> List[int]:
     return sorted(ids)
 
 
-def build_figure(output_dir: pathlib.Path, load_case_id: int, scale: float) -> go.Figure:
+def vec_dot(a: List[float], b: List[float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def vec_norm(a: List[float]) -> float:
+    return math.sqrt(vec_dot(a, a))
+
+
+def vec_cross(a: List[float], b: List[float]) -> List[float]:
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+
+
+def vec_scale(a: List[float], s: float) -> List[float]:
+    return [a[0] * s, a[1] * s, a[2] * s]
+
+
+def vec_add(a: List[float], b: List[float]) -> List[float]:
+    return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+
+
+def line_axes(node1: Dict[str, str], node2: Dict[str, str]):
+    p1 = [float(node1["x"]), float(node1["y"]), float(node1["z"])]
+    p2 = [float(node2["x"]), float(node2["y"]), float(node2["z"])]
+    dx = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
+    length = max(vec_norm(dx), 1e-12)
+    vx = vec_scale(dx, 1.0 / length)
+
+    if abs(vx[0]) < 1e-9 and abs(vx[1]) < 1e-9 and abs(vx[2]) > 1e-9:
+        vy = [0.0, 1.0, 0.0]
+    else:
+        z_axis = [0.0, 0.0, 1.0]
+        vy = vec_cross(z_axis, vx)
+        vy_norm = max(vec_norm(vy), 1e-12)
+        vy = vec_scale(vy, 1.0 / vy_norm)
+
+    vz = vec_cross(vx, vy)
+    vz_norm = max(vec_norm(vz), 1e-12)
+    vz = vec_scale(vz, 1.0 / vz_norm)
+    return p1, p2, length, vx, vy, vz
+
+
+def to_local(v: List[float], vx: List[float], vy: List[float], vz: List[float]) -> List[float]:
+    return [vec_dot(v, vx), vec_dot(v, vy), vec_dot(v, vz)]
+
+
+def from_local(v: List[float], vx: List[float], vy: List[float], vz: List[float]) -> List[float]:
+    return [
+        v[0] * vx[0] + v[1] * vy[0] + v[2] * vz[0],
+        v[0] * vx[1] + v[1] * vy[1] + v[2] * vz[1],
+        v[0] * vx[2] + v[1] * vy[2] + v[2] * vz[2],
+    ]
+
+
+def beam_curve_points(node1, node2, def1, def2, scale: float, npts: int = 21):
+    p1, _p2, length, vx, vy, vz = line_axes(node1, node2)
+
+    u1g = [float(def1["ux"]), float(def1["uy"]), float(def1["uz"])]
+    u2g = [float(def2["ux"]), float(def2["uy"]), float(def2["uz"])]
+    r1g = [float(def1["rx"]), float(def1["ry"]), float(def1["rz"])]
+    r2g = [float(def2["rx"]), float(def2["ry"]), float(def2["rz"])]
+
+    u1 = to_local(u1g, vx, vy, vz)
+    u2 = to_local(u2g, vx, vy, vz)
+    r1 = to_local(r1g, vx, vy, vz)
+    r2 = to_local(r2g, vx, vy, vz)
+
+    u1 = [scale * item for item in u1]
+    u2 = [scale * item for item in u2]
+    r1 = [scale * item for item in r1]
+    r2 = [scale * item for item in r2]
+
+    xs: List[float] = []
+    ys: List[float] = []
+    zs: List[float] = []
+
+    for i in range(npts):
+        xi = i / max(1, npts - 1)
+        x = xi * length
+
+        n1 = 1.0 - xi
+        n2 = xi
+        h1 = 1.0 - 3.0 * xi * xi + 2.0 * xi * xi * xi
+        h2 = length * (xi - 2.0 * xi * xi + xi * xi * xi)
+        h3 = 3.0 * xi * xi - 2.0 * xi * xi * xi
+        h4 = length * (-xi * xi + xi * xi * xi)
+
+        u_local = n1 * u1[0] + n2 * u2[0]
+        v_local = h1 * u1[1] + h2 * r1[2] + h3 * u2[1] + h4 * r2[2]
+        w_local = h1 * u1[2] - h2 * r1[1] + h3 * u2[2] - h4 * r2[1]
+
+        base = vec_add(p1, vec_scale(vx, x + u_local))
+        trans = from_local([0.0, v_local, w_local], vx, vy, vz)
+        point = vec_add(base, trans)
+
+        xs.append(point[0])
+        ys.append(point[1])
+        zs.append(point[2])
+
+    return xs, ys, zs
+
+
+def parse_model_for_load_overlay(model_path: str):
+    path = pathlib.Path(model_path).expanduser().resolve()
+    if not path.exists():
+        return None
+
+    nodes: Dict[int, List[float]] = {}
+    lines: Dict[int, Tuple[int, int]] = {}
+    nodal = []
+    conc = []
+    dist = []
+
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        kind = tokens[0]
+        p = tokens[1:]
+        try:
+            if kind == "NODE" and len(p) == 4:
+                nodes[int(p[0])] = [float(p[1]), float(p[2]), float(p[3])]
+            elif kind == "LINE" and len(p) == 3:
+                lines[int(p[0])] = (int(p[1]), int(p[2]))
+            elif kind == "NODAL_LOAD" and len(p) == 8:
+                nodal.append({
+                    "lc": int(p[0]),
+                    "node": int(p[1]),
+                    "fx": float(p[2]),
+                    "fy": float(p[3]),
+                    "fz": float(p[4]),
+                    "mx": float(p[5]),
+                    "my": float(p[6]),
+                    "mz": float(p[7]),
+                })
+            elif kind == "LINE_CONC_LOAD" and len(p) == 9:
+                conc.append({
+                    "lc": int(p[0]),
+                    "line": int(p[1]),
+                    "rel": float(p[2]),
+                    "fx": float(p[3]),
+                    "fy": float(p[4]),
+                    "fz": float(p[5]),
+                    "mx": float(p[6]),
+                    "my": float(p[7]),
+                    "mz": float(p[8]),
+                })
+            elif kind == "LINE_DIST_LOAD" and len(p) == 16:
+                dist.append({
+                    "lc": int(p[0]),
+                    "line": int(p[1]),
+                    "rel_start": float(p[2]),
+                    "rel_end": float(p[3]),
+                    "fxs": float(p[4]),
+                    "fys": float(p[5]),
+                    "fzs": float(p[6]),
+                    "fxe": float(p[10]),
+                    "fye": float(p[11]),
+                    "fze": float(p[12]),
+                    "mxs": float(p[7]),
+                    "mys": float(p[8]),
+                    "mzs": float(p[9]),
+                    "mxe": float(p[13]),
+                    "mye": float(p[14]),
+                    "mze": float(p[15]),
+                })
+        except Exception:
+            continue
+
+    return {
+        "nodes": nodes,
+        "lines": lines,
+        "nodal": nodal,
+        "conc": conc,
+        "dist": dist,
+    }
+
+
+def rel_to_t(rel_value: float, length: float) -> float:
+    if length <= 1e-12:
+        return 0.0
+    if rel_value > 1.0:
+        return max(0.0, min(1.0, rel_value / length))
+    return max(0.0, min(1.0, rel_value))
+
+
+def add_arrow_trace(fig: go.Figure, point: List[float], vec: List[float], arrow_scale: float, color: str, width: int):
+    magnitude = vec_norm(vec)
+    if magnitude < 1e-12:
+        return
+    direction = vec_scale(vec, 1.0 / magnitude)
+    arrow_len = magnitude * arrow_scale
+    tail = [
+        point[0] - direction[0] * arrow_len,
+        point[1] - direction[1] * arrow_len,
+        point[2] - direction[2] * arrow_len,
+    ]
+    fig.add_trace(
+        go.Scatter3d(
+            x=[tail[0], point[0]],
+            y=[tail[1], point[1]],
+            z=[tail[2], point[2]],
+            mode="lines",
+            line={"color": color, "width": width},
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+
+    cone_size = max(0.05, min(0.8, arrow_len * 0.25))
+    fig.add_trace(
+        go.Cone(
+            x=[point[0]],
+            y=[point[1]],
+            z=[point[2]],
+            u=[direction[0]],
+            v=[direction[1]],
+            w=[direction[2]],
+            sizemode="absolute",
+            sizeref=cone_size,
+            anchor="tip",
+            colorscale=[[0.0, color], [1.0, color]],
+            showscale=False,
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+
+def add_moment_glyph(fig: go.Figure, point: List[float], moment_vec: List[float], arrow_scale: float, color: str):
+    magnitude = vec_norm(moment_vec)
+    if magnitude < 1e-12:
+        return
+
+    axis = vec_scale(moment_vec, 1.0 / magnitude)
+    ref = [0.0, 0.0, 1.0] if abs(axis[2]) < 0.9 else [0.0, 1.0, 0.0]
+    e1 = vec_cross(axis, ref)
+    e1n = vec_norm(e1)
+    if e1n < 1e-12:
+        return
+    e1 = vec_scale(e1, 1.0 / e1n)
+    e2 = vec_cross(axis, e1)
+    e2 = vec_scale(e2, 1.0 / max(vec_norm(e2), 1e-12))
+
+    radius = max(0.08, min(1.5, magnitude * arrow_scale * 0.25))
+    start_ang = -0.4 * math.pi
+    end_ang = 1.25 * math.pi
+    n = 28
+
+    xs: List[float] = []
+    ys: List[float] = []
+    zs: List[float] = []
+    last_point = point
+    prev_point = point
+    for i in range(n):
+        t = i / max(1, n - 1)
+        ang = start_ang + (end_ang - start_ang) * t
+        circ = vec_add(vec_scale(e1, radius * math.cos(ang)), vec_scale(e2, radius * math.sin(ang)))
+        p = vec_add(point, circ)
+        xs.append(p[0])
+        ys.append(p[1])
+        zs.append(p[2])
+        prev_point = last_point
+        last_point = p
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=xs,
+            y=ys,
+            z=zs,
+            mode="lines",
+            line={"color": color, "width": 5},
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+
+    tangent = [last_point[0] - prev_point[0], last_point[1] - prev_point[1], last_point[2] - prev_point[2]]
+    add_arrow_trace(fig, last_point, tangent, 0.8, color, 5)
+
+
+def add_load_overlays(fig: go.Figure, model_data, load_case_id: int, arrow_scale: float, distributed_samples: int):
+    if not model_data:
+        return
+
+    nodes = model_data["nodes"]
+    lines = model_data["lines"]
+
+    for load in model_data["nodal"]:
+        if load["lc"] != load_case_id:
+            continue
+        node_id = load["node"]
+        if node_id not in nodes:
+            continue
+        add_arrow_trace(fig, nodes[node_id], [load["fx"], load["fy"], load["fz"]], arrow_scale, "#b22222", 8)
+        add_moment_glyph(fig, nodes[node_id], [load["mx"], load["my"], load["mz"]], arrow_scale, "#800080")
+
+    for load in model_data["conc"]:
+        if load["lc"] != load_case_id:
+            continue
+        line_id = load["line"]
+        if line_id not in lines:
+            continue
+        node1, node2 = lines[line_id]
+        if node1 not in nodes or node2 not in nodes:
+            continue
+        p1 = nodes[node1]
+        p2 = nodes[node2]
+        length = vec_norm([p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]])
+        t = rel_to_t(load["rel"], length)
+        point = [
+            p1[0] + t * (p2[0] - p1[0]),
+            p1[1] + t * (p2[1] - p1[1]),
+            p1[2] + t * (p2[2] - p1[2]),
+        ]
+        add_arrow_trace(fig, point, [load["fx"], load["fy"], load["fz"]], arrow_scale, "#ff8c00", 7)
+        add_moment_glyph(fig, point, [load["mx"], load["my"], load["mz"]], arrow_scale, "#8b5a00")
+
+    dist_n = max(2, int(distributed_samples))
+    for load in model_data["dist"]:
+        if load["lc"] != load_case_id:
+            continue
+        line_id = load["line"]
+        if line_id not in lines:
+            continue
+        node1, node2 = lines[line_id]
+        if node1 not in nodes or node2 not in nodes:
+            continue
+        p1 = nodes[node1]
+        p2 = nodes[node2]
+        length = vec_norm([p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]])
+        t_start = rel_to_t(load["rel_start"], length)
+        t_end = rel_to_t(load["rel_end"], length)
+        if t_end < t_start:
+            t_start, t_end = t_end, t_start
+
+        for i in range(dist_n):
+            s = i / max(1, dist_n - 1)
+            t = t_start * (1.0 - s) + t_end * s
+            point = [
+                p1[0] + t * (p2[0] - p1[0]),
+                p1[1] + t * (p2[1] - p1[1]),
+                p1[2] + t * (p2[2] - p1[2]),
+            ]
+            vec = [
+                load["fxs"] * (1.0 - s) + load["fxe"] * s,
+                load["fys"] * (1.0 - s) + load["fye"] * s,
+                load["fzs"] * (1.0 - s) + load["fze"] * s,
+            ]
+            mvec = [
+                load["mxs"] * (1.0 - s) + load["mxe"] * s,
+                load["mys"] * (1.0 - s) + load["mye"] * s,
+                load["mzs"] * (1.0 - s) + load["mze"] * s,
+            ]
+            add_arrow_trace(fig, point, vec, arrow_scale, "#1f6feb", 5)
+            add_moment_glyph(fig, point, mvec, arrow_scale, "#4b2e83")
+
+
+def build_figure(output_dir: pathlib.Path, load_case_id: int, scale: float, model_path: str = "", show_loads: bool = False, force_scale: float = 0.0015, distributed_samples: int = 8) -> go.Figure:
     nodes = read_csv(output_dir / "nodes.csv")
     lines = read_csv(output_dir / "lines.csv")
     defs = read_csv(output_dir / f"deflections_lc{load_case_id}.csv")
@@ -629,18 +1061,7 @@ def build_figure(output_dir: pathlib.Path, load_case_id: int, scale: float) -> g
         def1 = def_map[int(line["node1"])]
         def2 = def_map[int(line["node2"])]
 
-        xd = [
-            float(node1["x"]) + scale * float(def1["ux"]),
-            float(node2["x"]) + scale * float(def2["ux"]),
-        ]
-        yd = [
-            float(node1["y"]) + scale * float(def1["uy"]),
-            float(node2["y"]) + scale * float(def2["uy"]),
-        ]
-        zd = [
-            float(node1["z"]) + scale * float(def1["uz"]),
-            float(node2["z"]) + scale * float(def2["uz"]),
-        ]
+        xd, yd, zd = beam_curve_points(node1, node2, def1, def2, scale)
 
         fig.add_trace(
             go.Scatter3d(
@@ -654,8 +1075,159 @@ def build_figure(output_dir: pathlib.Path, load_case_id: int, scale: float) -> g
             )
         )
 
+    if show_loads and model_path:
+        add_load_overlays(fig, parse_model_for_load_overlay(model_path), load_case_id, force_scale, distributed_samples)
+
     fig.update_layout(
         title=f"FEA Result - Load Case {load_case_id}",
+        scene={
+            "xaxis_title": "X",
+            "yaxis_title": "Y",
+            "zaxis_title": "Z",
+            "aspectmode": "data",
+        },
+        margin={"l": 0, "r": 0, "t": 40, "b": 0},
+    )
+    return fig
+
+
+def read_line_metric_rows(output_dir: pathlib.Path, load_case_id: int) -> Dict[int, Dict[str, float]]:
+    stress_file = output_dir / f"line_stress_lc{load_case_id}.csv"
+    response_file = output_dir / f"line_response_lc{load_case_id}.csv"
+
+    if not stress_file.exists():
+        raise gr.Error(f"Missing file: {stress_file}")
+    if not response_file.exists():
+        raise gr.Error(f"Missing file: {response_file}. Re-run solver to generate shear/bending results.")
+
+    metric_map: Dict[int, Dict[str, float]] = {}
+    for row in read_csv(stress_file):
+        line_id = int(row["line_id"])
+        metric_map[line_id] = {
+            "node1": float(row["node1"]),
+            "node2": float(row["node2"]),
+            "length": float(row["length"]),
+            "strain_axial": float(row["strain_axial"]),
+            "sigma_axial": float(row["sigma_axial"]),
+            "axial_force": float(row["axial_force"]),
+        }
+
+    for row in read_csv(response_file):
+        line_id = int(row["line_id"])
+        if line_id not in metric_map:
+            metric_map[line_id] = {}
+        metric_map[line_id].update(
+            {
+                "node1": float(row["node1"]),
+                "node2": float(row["node2"]),
+                "length": float(row["length"]),
+                "max_abs_shear": float(row["max_abs_shear"]),
+                "max_abs_moment": float(row["max_abs_moment"]),
+            }
+        )
+    return metric_map
+
+
+def metric_descriptor(metric: str) -> Tuple[str, str, str]:
+    if metric == "Shear Force":
+        return "max_abs_shear", "Shear Force", "N"
+    if metric == "Bending Moment":
+        return "max_abs_moment", "Bending Moment", "N·m"
+    if metric == "Axial Force":
+        return "axial_force", "Axial Force", "N"
+    if metric == "Axial Strain":
+        return "strain_axial", "Axial Strain", "-"
+    return "sigma_axial", "Axial Stress", "Pa"
+
+
+def build_metric_figure(output_dir: pathlib.Path, load_case_id: int, scale: float, metric: str, model_path: str = "", show_loads: bool = False, force_scale: float = 0.0015, distributed_samples: int = 8) -> go.Figure:
+    nodes = read_csv(output_dir / "nodes.csv")
+    lines = read_csv(output_dir / "lines.csv")
+    defs = read_csv(output_dir / f"deflections_lc{load_case_id}.csv")
+    metric_map = read_line_metric_rows(output_dir, load_case_id)
+
+    col, label, unit = metric_descriptor(metric)
+    values = [abs(data.get(col, 0.0)) for data in metric_map.values()]
+    if not values:
+        raise gr.Error("No member metric values found for selected load case.")
+
+    cmin = min(values)
+    cmax = max(values)
+    if abs(cmax - cmin) < 1e-18:
+        cmin -= 1.0
+        cmax += 1.0
+
+    node_map = {int(node["id"]): node for node in nodes}
+    def_map = {int(row["id"]): row for row in defs}
+    colorscale_name = "Turbo"
+
+    fig = go.Figure()
+    for line in lines:
+        line_id = int(line["id"])
+        node1 = node_map[int(line["node1"])]
+        node2 = node_map[int(line["node2"])]
+
+        x = [float(node1["x"]), float(node2["x"])]
+        y = [float(node1["y"]), float(node2["y"])]
+        z = [float(node1["z"]), float(node2["z"])]
+        fig.add_trace(
+            go.Scatter3d(
+                x=x,
+                y=y,
+                z=z,
+                mode="lines",
+                name="Original",
+                line={"color": "#c9c9c9", "width": 3},
+                showlegend=False,
+            )
+        )
+
+        def1 = def_map[int(line["node1"])]
+        def2 = def_map[int(line["node2"])]
+        xd, yd, zd = beam_curve_points(node1, node2, def1, def2, scale)
+
+        value = abs(metric_map.get(line_id, {}).get(col, 0.0))
+        ratio = max(0.0, min(1.0, (value - cmin) / (cmax - cmin)))
+        color = sample_colorscale(colorscale_name, [ratio])[0]
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=xd,
+                y=yd,
+                z=zd,
+                mode="lines",
+                name=label,
+                line={"color": color, "width": 9},
+                showlegend=False,
+                hovertemplate=f"Line {line_id}<br>{label}={value:.3e} {unit}<extra></extra>",
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[None, None],
+            y=[None, None],
+            z=[None, None],
+            mode="markers",
+            marker={
+                "size": 0.01,
+                "color": [cmin, cmax],
+                "colorscale": colorscale_name,
+                "cmin": cmin,
+                "cmax": cmax,
+                "showscale": True,
+                "colorbar": {"title": f"{label} ({unit})"},
+            },
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    if show_loads and model_path:
+        add_load_overlays(fig, parse_model_for_load_overlay(model_path), load_case_id, force_scale, distributed_samples)
+
+    fig.update_layout(
+        title=f"FEA Result - {label} (Load Case {load_case_id})",
         scene={
             "xaxis_title": "X",
             "yaxis_title": "Y",
@@ -725,7 +1297,7 @@ def choose_output_from_any(path: str) -> str:
     return str(candidate.parent)
 
 
-def render(output_dir: str, load_case_id: int, scale: float):
+def render(output_dir: str, load_case_id: int, scale: float, view_mode: str, model_path: str, show_loads: bool, force_scale: float, distributed_samples: int):
     out = pathlib.Path(output_dir).expanduser().resolve()
     if not out.exists():
         raise gr.Error(f"Output directory not found: {out}")
@@ -741,8 +1313,89 @@ def render(output_dir: str, load_case_id: int, scale: float):
         if not file.exists():
             raise gr.Error(f"Missing file: {file}")
 
-    fig = build_figure(out, load_case_id, scale)
+    if view_mode == "Deflected Shape":
+        fig = build_figure(out, load_case_id, scale, model_path, show_loads, force_scale, int(distributed_samples))
+    else:
+        fig = build_metric_figure(out, load_case_id, scale, view_mode, model_path, show_loads, force_scale, int(distributed_samples))
     return fig
+
+
+def _metric_column(metric: str) -> str:
+    col, _, _ = metric_descriptor(metric)
+    return col
+
+
+def analyze_critical_members(output_dir: str, load_case_id: int, metric: str, top_n: int):
+    out = pathlib.Path(output_dir).expanduser().resolve()
+    if not out.exists():
+        raise gr.Error(f"Output directory not found: {out}")
+    if load_case_id is None:
+        raise gr.Error("Please refresh and select a load case.")
+
+    metric_rows = read_line_metric_rows(out, load_case_id)
+    if not metric_rows:
+        return [], "No member stress results found."
+
+    metric_col = _metric_column(metric)
+    parsed = []
+    for line_id, row in metric_rows.items():
+        try:
+            value = float(row.get(metric_col, 0.0))
+            parsed.append(
+                {
+                    "line_id": int(line_id),
+                    "node1": int(row.get("node1", 0)),
+                    "node2": int(row.get("node2", 0)),
+                    "length": float(row.get("length", 0.0)),
+                    "strain_axial": float(row.get("strain_axial", 0.0)),
+                    "sigma_axial": float(row.get("sigma_axial", 0.0)),
+                    "axial_force": float(row.get("axial_force", 0.0)),
+                    "max_abs_shear": float(row.get("max_abs_shear", 0.0)),
+                    "max_abs_moment": float(row.get("max_abs_moment", 0.0)),
+                    "metric": value,
+                    "metric_abs": abs(value),
+                }
+            )
+        except Exception:
+            continue
+
+    if not parsed:
+        return [], "No valid member result rows found."
+
+    parsed.sort(key=lambda item: item["metric_abs"], reverse=True)
+    top = parsed[: max(1, int(top_n))]
+
+    table = [
+        [
+            str(item["line_id"]),
+            str(item["node1"]),
+            str(item["node2"]),
+            f"{item['length']:.4g}",
+            f"{item['strain_axial']:.4e}",
+            f"{item['sigma_axial']:.4e}",
+            f"{item['axial_force']:.4e}",
+            f"{item['max_abs_shear']:.4e}",
+            f"{item['max_abs_moment']:.4e}",
+        ]
+        for item in top
+    ]
+
+    metric_values = [item["metric"] for item in parsed]
+    mean_value = sum(metric_values) / len(metric_values)
+    max_abs_item = max(parsed, key=lambda item: item["metric_abs"])
+    _, _, units = metric_descriptor(metric)
+
+    summary = (
+        f"Load case: {load_case_id}\n"
+        f"Metric: {metric} ({units})\n"
+        f"Members evaluated: {len(parsed)}\n"
+        f"Min: {min(metric_values):.4e} {units}\n"
+        f"Max: {max(metric_values):.4e} {units}\n"
+        f"Mean: {mean_value:.4e} {units}\n"
+        f"Critical member: Line {max_abs_item['line_id']} (|value|={max_abs_item['metric_abs']:.4e} {units})"
+    )
+
+    return table, summary
 
 
 def build_app() -> gr.Blocks:
@@ -785,6 +1438,9 @@ def build_app() -> gr.Blocks:
                     support_def_df = gr.Dataframe(headers=SUPPORT_DEF_COLS, value=sample_rows(SUPPORT_DEF_COLS), row_count=(6, "dynamic"), column_count=(len(SUPPORT_DEF_COLS), "fixed"), type="array", label="Support Definitions")
                     support_df = gr.Dataframe(headers=SUPPORT_COLS, value=sample_rows(SUPPORT_COLS), row_count=(8, "dynamic"), column_count=(len(SUPPORT_COLS), "fixed"), type="array", label="Support Assignment")
                     section_df = gr.Dataframe(headers=SECTION_COLS, value=sample_rows(SECTION_COLS), row_count=(6, "dynamic"), column_count=(len(SECTION_COLS), "fixed"), type="array", label="Sections (Rectangular)")
+                    with gr.Row():
+                        material_preset = gr.Dropdown(label="Material preset", choices=list(MATERIAL_PRESETS.keys()), value="Steel")
+                        apply_material_btn = gr.Button("Apply material preset")
                     material_df = gr.Dataframe(headers=MATERIAL_COLS, value=sample_rows(MATERIAL_COLS), row_count=(6, "dynamic"), column_count=(len(MATERIAL_COLS), "fixed"), type="array", label="Materials")
                     assign_section_df = gr.Dataframe(headers=ASSIGN_SECTION_COLS, value=sample_rows(ASSIGN_SECTION_COLS), row_count=(8, "dynamic"), column_count=(len(ASSIGN_SECTION_COLS), "fixed"), type="array", label="Assign Sections")
                     assign_material_df = gr.Dataframe(headers=ASSIGN_MATERIAL_COLS, value=sample_rows(ASSIGN_MATERIAL_COLS), row_count=(8, "dynamic"), column_count=(len(ASSIGN_MATERIAL_COLS), "fixed"), type="array", label="Assign Materials")
@@ -811,9 +1467,31 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     load_case = gr.Dropdown(label="Load case", choices=[], value=None)
                     scale = gr.Slider(label="Deflection scale", minimum=1.0, maximum=10000.0, value=1000.0, step=1.0)
+                    view_mode = gr.Dropdown(label="View", choices=["Deflected Shape", "Axial Stress", "Shear Force", "Bending Moment"], value="Deflected Shape")
+
+                with gr.Row():
+                    show_loads = gr.Checkbox(label="Show load arrows", value=True)
+                    force_scale = gr.Slider(label="Arrow scale", minimum=0.0001, maximum=0.02, value=0.0015, step=0.0001)
+                    distributed_samples = gr.Slider(label="Distributed arrows", minimum=2, maximum=20, value=8, step=1)
 
                 plot_button = gr.Button("Render")
                 plot = gr.Plot(label="3D Structure")
+
+                with gr.Accordion("Phase-2: Critical Members", open=False):
+                    with gr.Row():
+                        metric_mode = gr.Dropdown(label="Metric", choices=["Axial Stress", "Axial Force", "Axial Strain", "Shear Force", "Bending Moment"], value="Bending Moment")
+                        top_n = gr.Slider(label="Top members", minimum=1, maximum=20, step=1, value=5)
+                        analyze_button = gr.Button("Analyze")
+
+                    critical_table = gr.Dataframe(
+                        headers=["line", "node1", "node2", "length", "strain", "stress", "axial_force", "shear", "moment"],
+                        value=[],
+                        row_count=(8, "dynamic"),
+                        column_count=(9, "fixed"),
+                        type="array",
+                        label="Critical members",
+                    )
+                    critical_summary = gr.Textbox(label="Analysis summary", lines=8)
 
         all_builder_inputs = [
             nodes_df,
@@ -852,6 +1530,12 @@ def build_app() -> gr.Blocks:
             outputs=all_builder_inputs + [model_text, builder_status],
         )
 
+        apply_material_btn.click(
+            fn=lambda rows, preset: apply_material_preset(rows, preset),
+            inputs=[material_df, material_preset],
+            outputs=[material_df],
+        )
+
         build_text_btn.click(
             fn=build_and_validate_text,
             inputs=all_builder_inputs,
@@ -878,11 +1562,24 @@ def build_app() -> gr.Blocks:
 
         run_button.click(fn=run_solver, inputs=[executable_path, model_path, output_dir], outputs=[solver_log])
         refresh_button.click(fn=refresh_load_cases, inputs=[output_dir], outputs=[load_case, solver_log])
-        plot_button.click(fn=render, inputs=[output_dir, load_case, scale], outputs=[plot])
+        plot_button.click(
+            fn=render,
+            inputs=[output_dir, load_case, scale, view_mode, model_path, show_loads, force_scale, distributed_samples],
+            outputs=[plot],
+        )
+        analyze_button.click(
+            fn=analyze_critical_members,
+            inputs=[output_dir, load_case, metric_mode, top_n],
+            outputs=[critical_table, critical_summary],
+        )
 
     return demo
 
 
 if __name__ == "__main__":
     app = build_app()
-    app.launch(server_name="127.0.0.1", server_port=7860, inbrowser=True)
+    preferred_port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
+    try:
+        app.launch(server_name="127.0.0.1", server_port=preferred_port, inbrowser=True)
+    except OSError:
+        app.launch(server_name="127.0.0.1", server_port=0, inbrowser=True)
