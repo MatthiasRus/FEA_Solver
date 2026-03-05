@@ -5,9 +5,52 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <set>
 #include <stdexcept>
+
+namespace {
+
+std::string EscapeJson(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (char ch : text) {
+        switch (ch) {
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out += ch;
+            break;
+        }
+    }
+    return out;
+}
+
+double NormalizeRelativePosition(double raw, double length) {
+    if (length <= 1e-12) {
+        return 0.0;
+    }
+    if (raw > 1.0) {
+        return std::clamp(raw / length, 0.0, 1.0);
+    }
+    return std::clamp(raw, 0.0, 1.0);
+}
+
+} // namespace
 
 void STRLine::Refresh() {
     CG = { 0.5 * Node1->X + 0.5 * Node2->X,
@@ -746,38 +789,84 @@ void STRController::ApplyNodalLoadsForCase(int loadCaseId, std::vector<double>& 
 }
 
 void STRController::ApplyConcentratedLineLoadToVector(const STRLineLoadConcentrated& load, const STRLine& line, std::vector<double>& globalF) const {
-    const double r = std::clamp(load.RelativeLocation, 0.0, 1.0);
+    const double r = NormalizeRelativePosition(load.RelativeLocation, line.Length);
     const double n1 = 1.0 - r;
     const double n2 = r;
 
+    const double L = std::max(line.Length, 1e-12);
+    const double a = r * L;
+    const double b = L - a;
+
+    const double fy = load.Fy;
+    const double fz = load.Fz;
+
+    const double fy1 = fy * b * b * (3.0 * a + b) / (L * L * L);
+    const double fy2 = fy * a * a * (a + 3.0 * b) / (L * L * L);
+    const double mz1 = fy * a * b * b / (L * L);
+    const double mz2 = -fy * a * a * b / (L * L);
+
+    const double fz1 = fz * b * b * (3.0 * a + b) / (L * L * L);
+    const double fz2 = fz * a * a * (a + 3.0 * b) / (L * L * L);
+    const double my1 = -fz * a * b * b / (L * L);
+    const double my2 = fz * a * a * b / (L * L);
+
     Matrix tNode = NodeTransform(line.Vx, line.Vy, line.Vz);
 
-    std::array<double, 6> localAtNode1{ n1 * load.Fx, n1 * load.Fy, n1 * load.Fz, n1 * load.Mx, n1 * load.My, n1 * load.Mz };
-    std::array<double, 6> localAtNode2{ n2 * load.Fx, n2 * load.Fy, n2 * load.Fz, n2 * load.Mx, n2 * load.My, n2 * load.Mz };
+    std::array<double, 6> localAtNode1{
+        n1 * load.Fx,
+        fy1,
+        fz1,
+        n1 * load.Mx,
+        my1 + n1 * load.My,
+        mz1 + n1 * load.Mz
+    };
+    std::array<double, 6> localAtNode2{
+        n2 * load.Fx,
+        fy2,
+        fz2,
+        n2 * load.Mx,
+        my2 + n2 * load.My,
+        mz2 + n2 * load.Mz
+    };
 
     AddToGlobalNodeLoad(globalF, line.Node1->Id, localAtNode1, tNode);
     AddToGlobalNodeLoad(globalF, line.Node2->Id, localAtNode2, tNode);
 }
 
 void STRController::ApplyDistributedLineLoadToVector(const STRLineLoadDistributed& load, const STRLine& line, std::vector<double>& globalF) const {
-    const double r1 = std::clamp(load.RelativeLocationStart, 0.0, 1.0);
-    const double r2 = std::clamp(load.RelativeLocationEnd, 0.0, 1.0);
-    const double segmentFactor = std::max(0.0, r2 - r1);
+    const double r1Raw = NormalizeRelativePosition(load.RelativeLocationStart, line.Length);
+    const double r2Raw = NormalizeRelativePosition(load.RelativeLocationEnd, line.Length);
+    double r1 = r1Raw;
+    double r2 = r2Raw;
+    if (r2 < r1) {
+        std::swap(r1, r2);
+    }
 
-    const double fx = 0.5 * (load.FxStart + load.FxEnd) * segmentFactor;
-    const double fy = 0.5 * (load.FyStart + load.FyEnd) * segmentFactor;
-    const double fz = 0.5 * (load.FzStart + load.FzEnd) * segmentFactor;
-    const double mx = 0.5 * (load.MxStart + load.MxEnd) * segmentFactor;
-    const double my = 0.5 * (load.MyStart + load.MyEnd) * segmentFactor;
-    const double mz = 0.5 * (load.MzStart + load.MzEnd) * segmentFactor;
+    const double span = r2 - r1;
+    if (span <= 1e-12) {
+        return;
+    }
 
-    Matrix tNode = NodeTransform(line.Vx, line.Vy, line.Vz);
+    const int nSeg = 20;
+    const double ds = span / static_cast<double>(nSeg);
 
-    std::array<double, 6> localAtNode1{ 0.5 * fx, 0.5 * fy, 0.5 * fz, 0.5 * mx, 0.5 * my, 0.5 * mz };
-    std::array<double, 6> localAtNode2{ 0.5 * fx, 0.5 * fy, 0.5 * fz, 0.5 * mx, 0.5 * my, 0.5 * mz };
+    for (int i = 0; i < nSeg; ++i) {
+        const double sMid = r1 + (static_cast<double>(i) + 0.5) * ds;
+        const double alpha = (sMid - r1) / span;
 
-    AddToGlobalNodeLoad(globalF, line.Node1->Id, localAtNode1, tNode);
-    AddToGlobalNodeLoad(globalF, line.Node2->Id, localAtNode2, tNode);
+        STRLineLoadConcentrated lumped;
+        lumped.RelativeLocation = sMid;
+
+        lumped.Fx = (load.FxStart + alpha * (load.FxEnd - load.FxStart)) * ds * line.Length;
+        lumped.Fy = (load.FyStart + alpha * (load.FyEnd - load.FyStart)) * ds * line.Length;
+        lumped.Fz = (load.FzStart + alpha * (load.FzEnd - load.FzStart)) * ds * line.Length;
+
+        lumped.Mx = (load.MxStart + alpha * (load.MxEnd - load.MxStart)) * ds * line.Length;
+        lumped.My = (load.MyStart + alpha * (load.MyEnd - load.MyStart)) * ds * line.Length;
+        lumped.Mz = (load.MzStart + alpha * (load.MzEnd - load.MzStart)) * ds * line.Length;
+
+        ApplyConcentratedLineLoadToVector(lumped, line, globalF);
+    }
 }
 
 void STRController::ApplyLineLoadsForCase(int loadCaseId, std::vector<double>& globalF) const {
@@ -946,5 +1035,221 @@ void STRController::ExportResults(const std::string& outputDirectory) const {
             const auto r = n->ReactionsByLoadCase[lcIdx];
             out << n->Id << "," << d[0] << "," << d[1] << "," << d[2] << "," << d[3] << "," << d[4] << "," << d[5] << "," << r[0] << "," << r[1] << "," << r[2] << "," << r[3] << "," << r[4] << "," << r[5] << "\n";
         }
+    }
+
+    for (std::size_t lcIdx = 0; lcIdx < STRLoadCases.size(); ++lcIdx) {
+        const int loadCaseId = STRLoadCases[lcIdx]->Id;
+        const std::string stressPath = outputDirectory + "/line_stress_lc" + std::to_string(loadCaseId) + ".csv";
+        std::ofstream stressOut(stressPath);
+        stressOut << "line_id,node1,node2,length,strain_axial,sigma_axial,axial_force\n";
+
+        const std::string responsePath = outputDirectory + "/line_response_lc" + std::to_string(loadCaseId) + ".csv";
+        std::ofstream responseOut(responsePath);
+        responseOut << "line_id,node1,node2,length,n1,vy1,vz1,t1,my1,mz1,n2,vy2,vz2,t2,my2,mz2,max_abs_axial,max_abs_shear,max_abs_moment\n";
+
+        for (const auto& line : STRLines) {
+            const auto d1 = line->Node1->DeflectionsByLoadCase[lcIdx];
+            const auto d2 = line->Node2->DeflectionsByLoadCase[lcIdx];
+
+            const std::array<double, 3> duGlobal{
+                d2[0] - d1[0],
+                d2[1] - d1[1],
+                d2[2] - d1[2]
+            };
+
+            const double deltaAxial = Dot(duGlobal, line->Vx);
+            const double strainAxial = (line->Length > 1e-12) ? deltaAxial / line->Length : 0.0;
+            const double sigmaAxial = line->Material->E * strainAxial;
+            const double axialForce = sigmaAxial * line->Section->Ax;
+
+            Matrix kLocal = CalculateBeamLocalStiffness(
+                line->Section->Ax,
+                line->Section->Ix,
+                line->Section->Iy,
+                line->Section->Iz,
+                line->Material->E,
+                line->Material->G,
+                line->Length);
+            Matrix t = CalculateTransformation(line->Vx, line->Vy, line->Vz);
+
+            std::vector<double> dGlobal(12, 0.0);
+            dGlobal[0] = d1[0];
+            dGlobal[1] = d1[1];
+            dGlobal[2] = d1[2];
+            dGlobal[3] = d1[3];
+            dGlobal[4] = d1[4];
+            dGlobal[5] = d1[5];
+            dGlobal[6] = d2[0];
+            dGlobal[7] = d2[1];
+            dGlobal[8] = d2[2];
+            dGlobal[9] = d2[3];
+            dGlobal[10] = d2[4];
+            dGlobal[11] = d2[5];
+
+            const std::vector<double> dLocal = Multiply(t, dGlobal);
+            const std::vector<double> qLocal = Multiply(kLocal, dLocal);
+
+            const double n1 = qLocal[0];
+            const double vy1 = qLocal[1];
+            const double vz1 = qLocal[2];
+            const double t1 = qLocal[3];
+            const double my1 = qLocal[4];
+            const double mz1 = qLocal[5];
+            const double n2 = qLocal[6];
+            const double vy2 = qLocal[7];
+            const double vz2 = qLocal[8];
+            const double t2 = qLocal[9];
+            const double my2 = qLocal[10];
+            const double mz2 = qLocal[11];
+
+            const double maxAbsAxial = std::max(std::fabs(n1), std::fabs(n2));
+            const double shear1 = std::sqrt(vy1 * vy1 + vz1 * vz1);
+            const double shear2 = std::sqrt(vy2 * vy2 + vz2 * vz2);
+            const double maxAbsShear = std::max(shear1, shear2);
+            const double moment1 = std::sqrt(my1 * my1 + mz1 * mz1);
+            const double moment2 = std::sqrt(my2 * my2 + mz2 * mz2);
+            const double maxAbsMoment = std::max(moment1, moment2);
+
+            stressOut << line->Id << ","
+                << line->Node1->Id << ","
+                << line->Node2->Id << ","
+                << line->Length << ","
+                << strainAxial << ","
+                << sigmaAxial << ","
+                << axialForce << "\n";
+
+            responseOut << line->Id << ","
+                << line->Node1->Id << ","
+                << line->Node2->Id << ","
+                << line->Length << ","
+                << n1 << ","
+                << vy1 << ","
+                << vz1 << ","
+                << t1 << ","
+                << my1 << ","
+                << mz1 << ","
+                << n2 << ","
+                << vy2 << ","
+                << vz2 << ","
+                << t2 << ","
+                << my2 << ","
+                << mz2 << ","
+                << maxAbsAxial << ","
+                << maxAbsShear << ","
+                << maxAbsMoment << "\n";
+        }
+
+        const std::string jsonPath = outputDirectory + "/results_lc" + std::to_string(loadCaseId) + ".json";
+        std::ofstream jsonOut(jsonPath);
+        jsonOut << std::setprecision(15);
+        jsonOut << "{\n";
+        jsonOut << "  \"load_case\": { \"id\": " << loadCaseId << ", \"name\": \"" << EscapeJson(STRLoadCases[lcIdx]->Name) << "\" },\n";
+        jsonOut << "  \"nodes\": [\n";
+        for (std::size_t nIdx = 0; nIdx < STRNodes.size(); ++nIdx) {
+            const auto& n = STRNodes[nIdx];
+            const auto d = n->DeflectionsByLoadCase[lcIdx];
+            const auto r = n->ReactionsByLoadCase[lcIdx];
+            jsonOut << "    {\"id\": " << n->Id
+                << ", \"x\": " << n->X
+                << ", \"y\": " << n->Y
+                << ", \"z\": " << n->Z
+                << ", \"deflection\": [" << d[0] << ", " << d[1] << ", " << d[2] << ", " << d[3] << ", " << d[4] << ", " << d[5] << "]"
+                << ", \"reaction\": [" << r[0] << ", " << r[1] << ", " << r[2] << ", " << r[3] << ", " << r[4] << ", " << r[5] << "]";
+            if (n->Support) {
+                jsonOut << ", \"support\": \"" << EscapeJson(n->Support->Name) << "\"";
+            }
+            jsonOut << "}";
+            jsonOut << (nIdx + 1 < STRNodes.size() ? ",\n" : "\n");
+        }
+        jsonOut << "  ],\n";
+
+        jsonOut << "  \"lines\": [\n";
+        for (std::size_t lIdx = 0; lIdx < STRLines.size(); ++lIdx) {
+            const auto& line = STRLines[lIdx];
+            const auto d1 = line->Node1->DeflectionsByLoadCase[lcIdx];
+            const auto d2 = line->Node2->DeflectionsByLoadCase[lcIdx];
+            const std::array<double, 3> duGlobal{ d2[0] - d1[0], d2[1] - d1[1], d2[2] - d1[2] };
+            const double deltaAxial = Dot(duGlobal, line->Vx);
+            const double strainAxial = (line->Length > 1e-12) ? deltaAxial / line->Length : 0.0;
+            const double sigmaAxial = line->Material->E * strainAxial;
+            const double axialForce = sigmaAxial * line->Section->Ax;
+
+            Matrix kLocal = CalculateBeamLocalStiffness(
+                line->Section->Ax,
+                line->Section->Ix,
+                line->Section->Iy,
+                line->Section->Iz,
+                line->Material->E,
+                line->Material->G,
+                line->Length);
+            Matrix t = CalculateTransformation(line->Vx, line->Vy, line->Vz);
+
+            std::vector<double> dGlobal(12, 0.0);
+            dGlobal[0] = d1[0];
+            dGlobal[1] = d1[1];
+            dGlobal[2] = d1[2];
+            dGlobal[3] = d1[3];
+            dGlobal[4] = d1[4];
+            dGlobal[5] = d1[5];
+            dGlobal[6] = d2[0];
+            dGlobal[7] = d2[1];
+            dGlobal[8] = d2[2];
+            dGlobal[9] = d2[3];
+            dGlobal[10] = d2[4];
+            dGlobal[11] = d2[5];
+
+            const std::vector<double> dLocal = Multiply(t, dGlobal);
+            const std::vector<double> qLocal = Multiply(kLocal, dLocal);
+
+            const double n1 = qLocal[0];
+            const double vy1 = qLocal[1];
+            const double vz1 = qLocal[2];
+            const double t1 = qLocal[3];
+            const double my1 = qLocal[4];
+            const double mz1 = qLocal[5];
+            const double n2 = qLocal[6];
+            const double vy2 = qLocal[7];
+            const double vz2 = qLocal[8];
+            const double t2 = qLocal[9];
+            const double my2 = qLocal[10];
+            const double mz2 = qLocal[11];
+
+            const double maxAbsAxial = std::max(std::fabs(n1), std::fabs(n2));
+            const double shear1 = std::sqrt(vy1 * vy1 + vz1 * vz1);
+            const double shear2 = std::sqrt(vy2 * vy2 + vz2 * vz2);
+            const double maxAbsShear = std::max(shear1, shear2);
+            const double moment1 = std::sqrt(my1 * my1 + mz1 * mz1);
+            const double moment2 = std::sqrt(my2 * my2 + mz2 * mz2);
+            const double maxAbsMoment = std::max(moment1, moment2);
+
+            jsonOut << "    {\"id\": " << line->Id
+                << ", \"node1\": " << line->Node1->Id
+                << ", \"node2\": " << line->Node2->Id
+                << ", \"length\": " << line->Length
+                << ", \"section\": \"" << EscapeJson(line->Section ? line->Section->Name : "") << "\""
+                << ", \"material\": \"" << EscapeJson(line->Material ? line->Material->Name : "") << "\""
+                << ", \"strain_axial\": " << strainAxial
+                << ", \"sigma_axial\": " << sigmaAxial
+                << ", \"axial_force\": " << axialForce
+                << ", \"n1\": " << n1
+                << ", \"vy1\": " << vy1
+                << ", \"vz1\": " << vz1
+                << ", \"t1\": " << t1
+                << ", \"my1\": " << my1
+                << ", \"mz1\": " << mz1
+                << ", \"n2\": " << n2
+                << ", \"vy2\": " << vy2
+                << ", \"vz2\": " << vz2
+                << ", \"t2\": " << t2
+                << ", \"my2\": " << my2
+                << ", \"mz2\": " << mz2
+                << ", \"max_abs_axial\": " << maxAbsAxial
+                << ", \"max_abs_shear\": " << maxAbsShear
+                << ", \"max_abs_moment\": " << maxAbsMoment
+                << "}";
+            jsonOut << (lIdx + 1 < STRLines.size() ? ",\n" : "\n");
+        }
+        jsonOut << "  ]\n";
+        jsonOut << "}\n";
     }
 }

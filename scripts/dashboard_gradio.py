@@ -31,7 +31,8 @@ LINE_DIST_COLS = [
     "lc",
     "line",
     "rel_start",
-    "rel_end",
+    "rel_e"
+    "d",
     "FxS",
     "FyS",
     "FzS",
@@ -1580,6 +1581,6 @@ if __name__ == "__main__":
     app = build_app()
     preferred_port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
     try:
-        app.launch(server_name="127.0.0.1", server_port=preferred_port, inbrowser=True)
+        app.launch(server_name="127.0.0.1", server_port=preferred_port, inbrowser=True,share=True)
     except OSError:
-        app.launch(server_name="127.0.0.1", server_port=0, inbrowser=True)
+        app.launch(server_name="127.0.0.1", server_port=0, inbrowser=True,share=True)

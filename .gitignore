@@ -30,3 +30,9 @@ __pycache__/
 
 # Runtime outputs
 output/*.csv
+output/*.fea
+output/
+
+#ui stuffs
+ui/node_modules/
+ui/dist/

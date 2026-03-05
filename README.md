@@ -20,6 +20,9 @@ This writes CSV results to `output/`:
 - `output/nodes.csv`
 - `output/lines.csv`
 - `output/deflections_lc*.csv`
+- `output/line_stress_lc*.csv` (axial strain/stress/force per line)
+- `output/line_response_lc*.csv` (member end axial/shear/torsion/bending response)
+- `output/results_lc*.json` (structured per-load-case results)
 
 ## 1.1) Change shape and load cases
 
@@ -53,6 +56,7 @@ Arguments:
 - `output`: output folder
 - `1`: load case id
 - optional scale: `python3 scripts/render_results.py output 1 1500`
+- optional mode: `python3 scripts/render_results.py output 1 1500 stress`
 
 ## 3) Interactive dashboard (Gradio)
 
@@ -90,5 +94,16 @@ In the dashboard you now have 2 tabs:
 1. Set/select executable, model file, and output directory.
 2. Click **Run solver**.
 3. Click **Refresh load cases**.
-4. Pick a load case and deflection scale.
+4. Pick a load case, deflection scale, and view mode.
 5. Click **Render**.
+
+View modes:
+- **Deflected Shape**: original + deformed geometry.
+- **Axial Stress**: deformed geometry color-mapped by member axial stress ($\sigma = E\epsilon$).
+- **Shear Force**: deformed geometry color-mapped by max member shear magnitude.
+- **Bending Moment**: deformed geometry color-mapped by max member bending moment magnitude.
+
+Phase-2 panel (**Critical Members**):
+- Choose metric: **Axial Stress**, **Axial Force**, **Axial Strain**, **Shear Force**, or **Bending Moment**.
+- Choose Top N members and click **Analyze**.
+- Dashboard lists the most critical members by absolute metric value and shows min/max/mean summary.
