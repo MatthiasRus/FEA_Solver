@@ -1,5 +1,5 @@
 import './App.css'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { jsPDF } from 'jspdf'
 import Plot from 'react-plotly.js'
 import type { Layout } from 'plotly.js'
@@ -455,6 +455,56 @@ function App() {
   const [matGInput, setMatGInput] = useState('8.1e10')
 
   const [selectedNodes, setSelectedNodes] = useState<number[]>([])
+
+  const lineIdSet = useMemo(() => new Set(lines.map((line) => line.id)), [lines])
+  const nodeIdSet = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes])
+
+  const validLineConcLoads = useMemo(
+    () => lineConcLoads.filter((load) => lineIdSet.has(load.lineId)),
+    [lineConcLoads, lineIdSet],
+  )
+
+  const validLineDistLoads = useMemo(
+    () => lineDistLoads.filter((load) => lineIdSet.has(load.lineId)),
+    [lineDistLoads, lineIdSet],
+  )
+
+  const validNodalLoads = useMemo(
+    () => nodalLoads.filter((load) => nodeIdSet.has(load.nodeId)),
+    [nodalLoads, nodeIdSet],
+  )
+
+  useEffect(() => {
+    setLineConcLoads((prev) => {
+      const next = prev.filter((load) => lineIdSet.has(load.lineId))
+      return next.length === prev.length ? prev : next
+    })
+
+    setLineDistLoads((prev) => {
+      const next = prev.filter((load) => lineIdSet.has(load.lineId))
+      return next.length === prev.length ? prev : next
+    })
+
+    if (lines.length > 0) {
+      const fallbackLineId = lines[0].id
+      setConcLineId((prev) => (lineIdSet.has(prev) ? prev : fallbackLineId))
+      setDistLineId((prev) => (lineIdSet.has(prev) ? prev : fallbackLineId))
+    }
+  }, [lineIdSet, lines])
+
+  useEffect(() => {
+    setNodalLoads((prev) => {
+      const next = prev.filter((load) => nodeIdSet.has(load.nodeId))
+      return next.length === prev.length ? prev : next
+    })
+
+    if (nodes.length > 0) {
+      const fallbackNodeId = nodes[0].id
+      setLoadNode((prev) => (nodeIdSet.has(prev) ? prev : fallbackNodeId))
+      setLineNode1((prev) => (nodeIdSet.has(prev) ? prev : fallbackNodeId))
+      setLineNode2((prev) => (nodeIdSet.has(prev) ? prev : fallbackNodeId))
+    }
+  }, [nodeIdSet, nodes])
 
   const statusClass = useMemo(() => {
     if (busy) return 'status pending'
@@ -1074,20 +1124,20 @@ function App() {
     text.push('LOAD_CASE 1 BUILDER')
     text.push('')
 
-    for (const load of nodalLoads) {
+    for (const load of validNodalLoads) {
       text.push(`NODAL_LOAD 1 ${load.nodeId} ${load.fx} ${load.fy} ${load.fz} ${load.mx} ${load.my} ${load.mz}`)
     }
-    for (const load of lineConcLoads) {
+    for (const load of validLineConcLoads) {
       text.push(`LINE_CONC_LOAD 1 ${load.lineId} ${load.rel} ${load.fx} ${load.fy} ${load.fz} ${load.mx} ${load.my} ${load.mz}`)
     }
-    for (const load of lineDistLoads) {
+    for (const load of validLineDistLoads) {
       text.push(
         `LINE_DIST_LOAD 1 ${load.lineId} ${load.relStart} ${load.relEnd} ${load.fxS} ${load.fyS} ${load.fzS} ${load.mxS} ${load.myS} ${load.mzS} ${load.fxE} ${load.fyE} ${load.fzE} ${load.mxE} ${load.myE} ${load.mzE}`,
       )
     }
 
     return text.join('\n')
-  }, [nodes, lines, nodalLoads, lineConcLoads, lineDistLoads, materials, defaultMaterialName])
+  }, [nodes, lines, validNodalLoads, validLineConcLoads, validLineDistLoads, materials, defaultMaterialName])
 
   async function loadResults(loadCaseId?: number, outputDirOverride?: string) {
     setLoadingResults(true)
@@ -1147,6 +1197,17 @@ function App() {
   async function runBuilderSolve() {
     if (nodes.length < 2 || lines.length < 1) {
       setLog('Builder error\nBuilder needs at least 2 nodes and 1 line before solve.')
+      return
+    }
+
+    const orphanConc = lineConcLoads.length - validLineConcLoads.length
+    const orphanDist = lineDistLoads.length - validLineDistLoads.length
+    const orphanNodal = nodalLoads.length - validNodalLoads.length
+    if (orphanConc > 0 || orphanDist > 0 || orphanNodal > 0) {
+      setLineConcLoads(validLineConcLoads)
+      setLineDistLoads(validLineDistLoads)
+      setNodalLoads(validNodalLoads)
+      setLog(`Builder info\nRemoved orphan loads before solve (nodal: ${orphanNodal}, conc: ${orphanConc}, dist: ${orphanDist}). Click solve again.`)
       return
     }
 
@@ -1545,6 +1606,11 @@ function App() {
       return
     }
 
+    if (!lineIdSet.has(concLineId)) {
+      setLog('Builder error\nSelected line for concentrated load is not valid.')
+      return
+    }
+
     setLineConcLoads((prev) => [
       ...prev,
       {
@@ -1586,6 +1652,11 @@ function App() {
     const endNum = relEnd as number
     if (startNum < 0 || startNum > 1 || endNum < 0 || endNum > 1 || endNum <= startNum) {
       setLog('Builder error\nDistributed load range must satisfy 0 <= start < end <= 1.')
+      return
+    }
+
+    if (!lineIdSet.has(distLineId)) {
+      setLog('Builder error\nSelected line for distributed load is not valid.')
       return
     }
 
