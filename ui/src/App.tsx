@@ -17,6 +17,26 @@ type SolveResponse = {
   error?: string
 }
 
+const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').replace(/\/$/, '')
+
+function apiUrl(pathname: string) {
+  if (!API_BASE_URL) return pathname
+  return `${API_BASE_URL}${pathname}`
+}
+
+async function parseApiResponse(response: Response) {
+  const text = await response.text()
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {
+      ok: false,
+      error: `Non-JSON response from API (${response.status}): ${text.slice(0, 240)}`,
+    }
+  }
+}
+
 type LoadCase = {
   id: number
   name: string
@@ -1073,13 +1093,13 @@ function App() {
     setLoadingResults(true)
     try {
       const targetOutputDir = outputDirOverride ?? activeResultsDir
-      const response = await fetch('/api/results', {
+      const response = await fetch(apiUrl('/api/results'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outputDir: targetOutputDir, loadCaseId: loadCaseId ?? selectedLoadCaseId }),
       })
 
-      const data = (await response.json()) as ResultsResponse
+      const data = (await parseApiResponse(response)) as ResultsResponse
       if (!response.ok || !data.ok) {
         setLog(`Results load failed\n${data.error ?? 'Unknown error'}`)
         setResults(null)
@@ -1103,12 +1123,12 @@ function App() {
     setResults(null)
     setLog('Running solver...')
     try {
-      const response = await fetch('/api/solve', {
+      const response = await fetch(apiUrl('/api/solve'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ executablePath, modelPath, outputDir, isolateRun: true }),
       })
-      const data = (await response.json()) as SolveResponse
+      const data = (await parseApiResponse(response)) as SolveResponse
       if (!response.ok || !data.ok) {
         setLog(`Solve failed (code ${data.code ?? 'n/a'})\n${data.error ?? data.stderr ?? 'Unknown error'}`)
       } else {
@@ -1135,7 +1155,7 @@ function App() {
     setResults(null)
     setLog('Running solver using builder model...')
     try {
-      const response = await fetch('/api/solve-text', {
+      const response = await fetch(apiUrl('/api/solve-text'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1146,7 +1166,7 @@ function App() {
           modelFileName: 'builder_model_v03.fea',
         }),
       })
-      const data = (await response.json()) as SolveResponse
+      const data = (await parseApiResponse(response)) as SolveResponse
       if (!response.ok || !data.ok) {
         setLog(`Solve failed (code ${data.code ?? 'n/a'})\n${data.error ?? data.stderr ?? 'Unknown error'}`)
       } else {

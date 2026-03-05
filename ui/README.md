@@ -61,6 +61,16 @@ npm run build
 npm run preview
 ```
 
+## Vercel deployment notes
+
+- Vercel does not run `bridge/server.js` as a persistent process.
+- This UI now includes serverless API handlers under `ui/api/*` for `/api/health`, `/api/solve`, `/api/solve-text`, `/api/results`.
+- For solver execution in Vercel, you must provide a Linux executable and paths via environment variables:
+	- `FEA_EXECUTABLE_PATH`
+	- `FEA_MODEL_PATH` (optional)
+	- `FEA_OUTPUT_DIR` (optional; defaults to `/tmp/fea-output` on Vercel)
+- If your real backend is hosted elsewhere, set `VITE_API_BASE_URL` so the UI calls that API instead of same-origin `/api`.
+
 ## Version roadmap
 
 - V0.1: local bridge + solve from UI
