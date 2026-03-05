@@ -10,10 +10,17 @@ app.use(express.json())
 
 const UI_ROOT = path.resolve(process.cwd())
 const REPO_ROOT = path.resolve(UI_ROOT, '..')
-const DEFAULT_EXECUTABLE = path.resolve(REPO_ROOT, 'build-linux', 'MyProject')
-const DEFAULT_MODEL = path.resolve(REPO_ROOT, 'models', 'sample_frame.fea')
-const DEFAULT_OUTPUT = path.resolve(REPO_ROOT, 'output')
-const PORT = Number(process.env.FEA_BRIDGE_PORT || 8787)
+
+function resolveEnvPath(envValue, fallbackPath) {
+  if (!envValue || !envValue.trim()) return fallbackPath
+  return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue)
+}
+
+
+const DEFAULT_EXECUTABLE = resolveEnvPath(process.env.FEA_EXECUTABLE_PATH, path.resolve(REPO_ROOT, 'build-linux', 'MyProject'))
+const DEFAULT_MODEL = resolveEnvPath(process.env.FEA_MODEL_PATH, path.resolve(REPO_ROOT, 'models', 'sample_frame.fea'))
+const DEFAULT_OUTPUT = resolveEnvPath(process.env.FEA_OUTPUT_DIR, path.resolve(REPO_ROOT, 'output'))
+const PORT = Number(process.env.PORT || process.env.FEA_BRIDGE_PORT || 8787)
 
 function getLoadCaseFiles(outputDir) {
   if (!fs.existsSync(outputDir)) {
