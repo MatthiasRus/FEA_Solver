@@ -1,7 +1,12 @@
 
+# IDE / Editor settings
+.vs/
+.vscode/
+
 # CMake / build
 build/
 build-linux/
+out/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
@@ -11,11 +16,13 @@ compile_commands.json
 .ninja_*
 
 # MSVC / VS generated
-.vs/
 x64/
 Debug/
 Release/
 MyProject.dir/
+*.sln
+*.vcxproj
+*.vcxproj.filters
 *.vcxproj.user
 *.suo
 *.ilk
@@ -27,12 +34,13 @@ MyProject.dir/
 .venv/
 __pycache__/
 *.pyc
+scripts/.gradio/
 
 # Runtime outputs
 output/*.csv
 output/*.fea
 output/
 
-#ui stuffs
+# UI
 ui/node_modules/
 ui/dist/
